@@ -107,6 +107,7 @@ export default async (req: Request): Promise<Response> => {
             config: {
                 tools: [{ googleSearch: {} }],
                 systemInstruction,
+                thinkingConfig: { thinkingBudget: 0 },
             },
         });
 

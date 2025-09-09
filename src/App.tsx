@@ -3,7 +3,7 @@ import type { DiagramNode, Edge, NodeData, Source, CodeData } from './types';
 import ChatInput from './components/ChatInput';
 import DiagramView, { type DiagramViewHandle } from './components/DiagramView';
 import { streamGroundedResponse } from './services/geminiService';
-import { HomeIcon, SunIcon, MoonIcon, ResetFocusIcon } from './components/Icons';
+import { HomeIcon, SunIcon, MoonIcon, ResetFocusIcon, ExportIcon } from './components/Icons';
 
 const NODE_WIDTH = 350;
 const USER_NODE_HEIGHT = 80;
@@ -106,6 +106,7 @@ const App: React.FC = () => {
     const [edges, setEdges] = useState<Edge[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+    const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
     const lastUserNodeId = useRef<string>('start-node');
     const diagramViewRef = useRef<DiagramViewHandle>(null);
 
@@ -130,7 +131,14 @@ const App: React.FC = () => {
         diagramViewRef.current?.zoomToFit();
     };
 
+    const handleExport = useCallback(() => {
+        diagramViewRef.current?.exportAsPng();
+    }, []);
+
     const handleNodeClick = (nodeId: string) => {
+        if (editingNodeId && editingNodeId !== nodeId) {
+            setEditingNodeId(null);
+        }
         const newFocusedId = focusedNodeId === nodeId ? null : nodeId;
         setFocusedNodeId(newFocusedId);
         if (newFocusedId) {
@@ -138,7 +146,10 @@ const App: React.FC = () => {
         }
     };
     
-    const handleClearFocus = () => setFocusedNodeId(null);
+    const handleClearFocus = () => {
+        setFocusedNodeId(null);
+        setEditingNodeId(null);
+    }
 
     const handleNodeMeasured = useCallback((nodeId: string, width: number, height: number) => {
         setNodes(prevNodes => {
@@ -177,13 +188,24 @@ const App: React.FC = () => {
         handleSend(parentNode.data.text);
     }, []);
 
-    const handleEdit = useCallback((nodeId: string, currentText: string) => {
-        const newText = window.prompt("Edit your message:", currentText);
-        if (newText === null || newText.trim() === "" || newText === currentText) return;
-        
+    const handleEdit = useCallback((nodeId: string) => {
+        setFocusedNodeId(nodeId);
+        setEditingNodeId(nodeId);
+    }, []);
+
+    const handleCancelEdit = useCallback(() => {
+        setEditingNodeId(null);
+    }, []);
+
+    const handleSaveEdit = useCallback((nodeId: string, newText: string) => {
+        setEditingNodeId(null);
         const currentNodes = nodesRef.current;
+        const originalNode = currentNodes.find(n => n.id === nodeId);
+        if (!originalNode || newText.trim() === "" || newText === originalNode.data.text) {
+            return;
+        }
+
         const currentEdges = edgesRef.current;
-        
         const descendants = getDescendants(nodeId, currentNodes, currentEdges);
         
         setNodes(currentNodes.map(n => n.id === nodeId ? {...n, data: {...n.data, text: newText}} : n).filter(n => !descendants.has(n.id)));
@@ -193,15 +215,11 @@ const App: React.FC = () => {
         handleSend(newText);
     }, []);
 
-    const handleSend = useCallback(async (prompt: string, sourceNodeOverride?: string) => {
-        const creatorRegex = /who (made|created) (you|this)/i;
-        if (creatorRegex.test(prompt)) {
-            // This is a special case and can be refactored to use the main flow if desired
-            return; 
-        }
 
+    const handleSend = useCallback(async (prompt: string, sourceNodeOverride?: string) => {
         setIsLoading(true);
         setFocusedNodeId(null);
+        setEditingNodeId(null);
         
         const sourceNodeId = sourceNodeOverride || lastUserNodeId.current;
         const currentNodes = nodesRef.current; 
@@ -235,14 +253,20 @@ const App: React.FC = () => {
         };
         
         const userEdge: Edge = { id: `${sourceNode.id}-to-${userNodeId}`, source: sourceNode.id, target: userNodeId };
+        const thinkingEdge: Edge = { id: `${userNodeId}-to-${aiNodeId}`, source: userNodeId, target: aiNodeId };
         
         setNodes([...nodesWithUser, thinkingNode]);
-        setEdges(prev => [...prev, userEdge]);
+        setEdges(prev => [...prev, userEdge, thinkingEdge]);
         lastUserNodeId.current = userNodeId;
         setTimeout(() => diagramViewRef.current?.focusOnNode(userNodeId), 100);
 
+        const MAX_CONTEXT_NODES = 15;
+        const recentNodes = nodesWithUser.slice(-MAX_CONTEXT_NODES);
+        const recentNodeIds = new Set(recentNodes.map(n => n.id));
+        const recentEdges = edgesRef.current.filter(e => recentNodeIds.has(e.source) || recentNodeIds.has(e.target));
+
         const streamedData: { text: string } = { text: "" };
-        const streamPromise = streamGroundedResponse(prompt, nodesWithUser, edgesRef.current, (textChunk) => {
+        const streamPromise = streamGroundedResponse(prompt, recentNodes, recentEdges, (textChunk) => {
             streamedData.text += textChunk;
             setNodes(prev => prev.map(n => 
                 n.id === aiNodeId 
@@ -253,6 +277,16 @@ const App: React.FC = () => {
 
         const { sources, weather, stock, code, position, reasoning, sourceNodeId: connectionTargetId, fullText } = await streamPromise;
         
+        if (!fullText) {
+            setNodes(prev => prev.map(n => 
+                n.id === aiNodeId 
+                ? { ...n, data: { ...n.data, isLoading: false } } 
+                : n
+            ));
+            setIsLoading(false);
+            return;
+        }
+
         const finalAiData: NodeData = { text: fullText, weather, stock, reasoning, isLoading: false, sources };
         const estimatedSize = estimateAiNodeSize({...finalAiData, code });
 
@@ -299,7 +333,6 @@ const App: React.FC = () => {
             collisionCheckNodes.push(finalNode);
         });
 
-        const finalAiNode = newlyPlacedNodes.find(n => n.type === 'ai')!;
         const newSourceNodes = newlyPlacedNodes.filter(n => n.type === 'source');
         const newCodeNode = newlyPlacedNodes.find(n => n.type === 'code');
         
@@ -322,7 +355,8 @@ const App: React.FC = () => {
         
         setEdges(prev => {
             const connectionSourceId = connectionTargetId && nodesRef.current.some(n => n.id === connectionTargetId) ? connectionTargetId : userNodeId;
-            const finalEdges = [...prev, ...newEdges];
+            const edgesWithoutTemporary = prev.filter(e => e.target !== aiNodeId);
+            const finalEdges = [...edgesWithoutTemporary, ...newEdges];
             finalEdges.push({id: `${connectionSourceId}-to-${aiNodeId}`, source: connectionSourceId, target: aiNodeId});
             return finalEdges.filter((edge, index, self) => index === self.findIndex(e => (e.source === edge.source && e.target === edge.target)));
         });
@@ -337,7 +371,7 @@ const App: React.FC = () => {
 
     return (
         <main className="h-screen w-screen text-gray-900 dark:text-white overflow-hidden relative font-sans bg-slate-50 dark:bg-gray-900">
-            <DiagramView ref={diagramViewRef} nodes={nodes} edges={edges} theme={theme} focusedNodeId={focusedNodeId} onNodeClick={handleNodeClick} onClearFocus={handleClearFocus} onNodeMeasured={handleNodeMeasured} onCopy={handleCopy} onRegenerate={handleRegenerate} onEdit={handleEdit} />
+            <DiagramView ref={diagramViewRef} nodes={nodes} edges={edges} theme={theme} focusedNodeId={focusedNodeId} editingNodeId={editingNodeId} onNodeClick={handleNodeClick} onClearFocus={handleClearFocus} onNodeMeasured={handleNodeMeasured} onCopy={handleCopy} onRegenerate={handleRegenerate} onEdit={handleEdit} onSaveEdit={handleSaveEdit} onCancelEdit={handleCancelEdit} />
             <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
                 <button 
                     onClick={handleResetView}
@@ -345,6 +379,13 @@ const App: React.FC = () => {
                     title="Zoom to Fit"
                 >
                     <HomeIcon className="w-6 h-6" />
+                </button>
+                 <button 
+                    onClick={handleExport}
+                    className="p-3 bg-white/80 dark:bg-gray-800/80 backdrop-blur-md rounded-full text-gray-600 dark:text-gray-300 hover:text-black dark:hover:text-white hover:bg-gray-200 dark:hover:bg-gray-700 transition-all duration-200 shadow-lg"
+                    title="Export as PNG"
+                >
+                    <ExportIcon className="w-6 h-6" />
                 </button>
                  {focusedNodeId && (
                     <button 

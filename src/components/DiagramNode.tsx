@@ -1,4 +1,4 @@
-import React, { useRef, useLayoutEffect, useState } from 'react';
+import React, { useRef, useLayoutEffect, useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -82,16 +82,28 @@ const ActionButton: React.FC<{ onClick: () => void; title: string; children: Rea
 interface DiagramNodeComponentProps {
     node: DiagramNode;
     isFaded: boolean;
+    isEditing: boolean;
     onClick: (nodeId: string) => void;
     onMeasured: (nodeId: string, width: number, height: number) => void;
     onCopy: (text: string) => void;
     onRegenerate: (nodeId: string) => void;
     onEdit: (nodeId: string, currentText: string) => void;
+    onSaveEdit: (nodeId: string, newText: string) => void;
+    onCancelEdit: () => void;
 }
 
-const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFaded, onClick, onMeasured, onCopy, onRegenerate, onEdit }) => {
+const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFaded, isEditing, onClick, onMeasured, onCopy, onRegenerate, onEdit, onSaveEdit, onCancelEdit }) => {
     const nodeRef = useRef<any>(null);
     const [justCopied, setJustCopied] = useState(false);
+    const [editText, setEditText] = useState(node.data.text);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    useEffect(() => {
+        if (isEditing) {
+            setEditText(node.data.text);
+            setTimeout(() => textareaRef.current?.focus(), 50);
+        }
+    }, [isEditing, node.data.text]);
 
     useLayoutEffect(() => {
         if (nodeRef.current) {
@@ -101,13 +113,22 @@ const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFad
                 onMeasured(node.id, width, height);
             }
         }
-    }, [node.data, node.width, node.height, node.id, onMeasured]);
+    }, [node.data, node.width, node.height, node.id, onMeasured, editText, isEditing]);
 
     const handleCopy = () => {
         onCopy(node.data.text);
         setJustCopied(true);
         setTimeout(() => setJustCopied(false), 1500);
     };
+
+    const handleSave = () => {
+        onSaveEdit(node.id, editText);
+    };
+
+    const handleCancel = () => {
+        onCancelEdit();
+    };
+
 
     const nodeStyles: { [key: string]: string } = {
         user: 'bg-green-100 dark:bg-green-900/60 border-green-300 dark:border-green-700 text-green-900 dark:text-white',
@@ -120,15 +141,15 @@ const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFad
     const loadingStyle = 'bg-pink-100 dark:bg-pink-900/80 border-pink-400 dark:border-pink-500';
     const fadedStyle = 'opacity-30 blur-[2px]';
     
-    const baseClasses = `absolute p-1 rounded-2xl shadow-lg backdrop-blur-md transition-all duration-500 cursor-pointer flex flex-col gap-0 group`;
-    const finalClasses = `${baseClasses} ${isFaded ? fadedStyle : ''} ${node.data.isLoading ? loadingStyle : nodeStyles[node.type]}`;
+    const baseClasses = `absolute p-1 rounded-2xl shadow-lg backdrop-blur-md transition-all duration-500 flex flex-col gap-0 group`;
+    const finalClasses = `${baseClasses} ${isFaded && !isEditing ? fadedStyle : ''} ${node.data.isLoading ? loadingStyle : nodeStyles[node.type]} ${isEditing ? 'cursor-default' : 'cursor-pointer'}`;
 
     if (node.type === 'source') {
         return (
              <div ref={nodeRef}
                 className={finalClasses}
                 onClick={(e) => { e.stopPropagation(); onClick(node.id); }}
-                style={{ left: `${node.position.x}px`, top: `${node.position.y}px`, width: `${node.width}px`, minHeight: `${node.height}px`, transform: 'translate(-50%, -50%)', borderWidth: '1px' }}>
+                style={{ left: `${node.position.x}px`, top: `${node.position.y}px`, width: `${node.width}px`, transform: 'translate(-50%, -50%)', borderWidth: '1px' }}>
                 <a href={node.data.uri} target="_blank" rel="noopener noreferrer" className="block p-2">
                     <p className="m-0 font-semibold truncate" title={node.data.text}>{node.data.text}</p>
                     <p className="m-0 text-xs text-yellow-700 dark:text-yellow-300 truncate opacity-80" title={node.data.uri}>{node.data.uri}</p>
@@ -142,20 +163,20 @@ const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFad
     return (
         <div
             ref={nodeRef}
-            onClick={(e) => { e.stopPropagation(); onClick(node.id); }}
+            onClick={(e) => { if (!isEditing) { e.stopPropagation(); onClick(node.id); } }}
             onMouseDown={(e) => e.stopPropagation()} 
             className={finalClasses}
             style={{
                 left: `${node.position.x}px`,
                 top: `${node.position.y}px`,
                 width: `${node.width}px`,
-                minHeight: `${node.height}px`,
+                height: 'auto',
                 transform: 'translate(-50%, -50%)',
                 borderWidth: '1px'
             }}
         >
              <div className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center bg-white/50 dark:bg-black/20 backdrop-blur-sm rounded-full p-0.5">
-                {node.type === 'user' && !node.data.isLoading && (
+                {node.type === 'user' && !node.data.isLoading && !isEditing && (
                     <ActionButton onClick={() => onEdit(node.id, content)} title="Edit">
                         <EditIcon className="w-4 h-4" />
                     </ActionButton>
@@ -165,7 +186,7 @@ const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFad
                         <RegenerateIcon className="w-4 h-4" />
                     </ActionButton>
                 )}
-                {!node.data.isLoading && content && (
+                {!node.data.isLoading && content && !isEditing && (
                     <ActionButton onClick={handleCopy} title={justCopied ? "Copied!" : "Copy"}>
                         <CopyIcon className="w-4 h-4" />
                     </ActionButton>
@@ -188,7 +209,31 @@ const DiagramNodeComponent: React.FC<DiagramNodeComponentProps> = ({ node, isFad
                     ) : (node.type === 'ai' || node.type === 'system') ? (
                         <MarkdownContent content={content} />
                     ) : (node.type === 'user') ? (
-                        <div className="p-3">{content}</div>
+                        isEditing ? (
+                            <div className="p-3 flex flex-col gap-2">
+                                <textarea
+                                    ref={textareaRef}
+                                    value={editText}
+                                    onChange={(e) => setEditText(e.target.value)}
+                                    className="w-full bg-white/80 dark:bg-black/20 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white"
+                                    rows={3}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                                            handleSave();
+                                        }
+                                        if (e.key === 'Escape') {
+                                            handleCancel();
+                                        }
+                                    }}
+                                />
+                                <div className="flex justify-end gap-2">
+                                    <button onClick={handleCancel} className="px-3 py-1 text-sm rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Cancel</button>
+                                    <button onClick={handleSave} className="px-3 py-1 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-500 transition-colors">Save</button>
+                                </div>
+                            </div>
+                        ) : (
+                           <div className="p-3">{content}</div>
+                        )
                     ) : null}
 
                     {node.data.reasoning && (

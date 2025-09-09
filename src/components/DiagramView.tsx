@@ -1,23 +1,28 @@
 import React, { useMemo, useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import type { DiagramNode, Edge } from '../types';
 import DiagramNodeComponent from './DiagramNode';
+import html2canvas from 'html2canvas';
 
 interface DiagramViewProps {
   nodes: DiagramNode[];
   edges: Edge[];
   theme: 'light' | 'dark';
   focusedNodeId: string | null;
+  editingNodeId: string | null;
   onNodeClick: (nodeId: string) => void;
   onClearFocus: () => void;
   onNodeMeasured: (nodeId: string, width: number, height: number) => void;
   onCopy: (text: string) => void;
   onRegenerate: (nodeId: string) => void;
   onEdit: (nodeId: string, currentText: string) => void;
+  onSaveEdit: (nodeId: string, newText: string) => void;
+  onCancelEdit: () => void;
 }
 
 export interface DiagramViewHandle {
   zoomToFit: () => void;
   focusOnNode: (nodeId: string) => void;
+  exportAsPng: () => void;
 }
 
 interface Point {
@@ -60,7 +65,7 @@ const getBoundaryPoint = (source: DiagramNode, target: DiagramNode, offset: numb
     return { x, y };
 };
 
-const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, edges, theme, focusedNodeId, onNodeClick, onClearFocus, onNodeMeasured, onCopy, onRegenerate, onEdit }, ref) => {
+const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, edges, theme, focusedNodeId, editingNodeId, onNodeClick, onClearFocus, onNodeMeasured, onCopy, onRegenerate, onEdit, onSaveEdit, onCancelEdit }, ref) => {
     const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
     const viewRef = useRef<HTMLDivElement>(null);
     const isPanning = useRef(false);
@@ -114,6 +119,23 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
         });
         return { width: (maxX - minX) + 2000, height: (maxY - minY) + 2000, offsetX: minX - 1000, offsetY: minY - 1000 };
     }, [nodes]);
+    
+    const drawnEdges = useMemo(() => {
+        return edges.map(edge => {
+            const sourceNode = nodeMap.get(edge.source);
+            const targetNode = nodeMap.get(edge.target);
+            if (!sourceNode || !targetNode || sourceNode.width === 0 || targetNode.width === 0) return null;
+           
+            const start = getBoundaryPoint(sourceNode, targetNode);
+            const end = getBoundaryPoint(targetNode, sourceNode, 15);
+
+            const isFaded = focusedNodeId && (!activeNodeIds?.has(edge.source) || !activeNodeIds?.has(edge.target));
+            const path = `M ${start.x - contentBounds.offsetX} ${start.y - contentBounds.offsetY} L ${end.x - contentBounds.offsetX} ${end.y - contentBounds.offsetY}`;
+            
+            return { id: edge.id, path, isFaded };
+        }).filter((e): e is { id: string; path: string; isFaded: boolean; } => e !== null);
+    }, [edges, nodeMap, focusedNodeId, activeNodeIds, contentBounds.offsetX, contentBounds.offsetY]);
+
 
     const animateToTransform = (targetTransform: { scale: number, x: number, y: number }) => {
         if (animationTimeout.current) clearTimeout(animationTimeout.current);
@@ -173,7 +195,33 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
         animateToTransform({ scale: newScale, x: newX, y: newY });
     };
 
-    useImperativeHandle(ref, () => ({ zoomToFit, focusOnNode }));
+    const exportAsPng = async () => {
+        const element = viewRef.current;
+        if (!element) return;
+    
+        // Temporarily hide UI elements that shouldn't be in the export
+        const uiButtons = element.parentElement?.querySelectorAll<HTMLElement>('.absolute.top-4, .absolute.bottom-0');
+        uiButtons?.forEach(el => el.style.visibility = 'hidden');
+    
+        const canvas = await html2canvas(element, {
+            useCORS: true,
+            backgroundColor: theme === 'dark' ? '#111827' : '#f9fafb',
+            logging: false,
+        });
+    
+        // Restore UI elements
+        uiButtons?.forEach(el => el.style.visibility = 'visible');
+    
+        const data = canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        link.href = data;
+        link.download = 'ai-diagram.png';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    useImperativeHandle(ref, () => ({ zoomToFit, focusOnNode, exportAsPng }));
 
     useEffect(() => { if (viewRef.current && nodes.length === 1) focusOnNode('start-node') }, [nodes.length]);
     
@@ -263,21 +311,23 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
                         <defs>
                             <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto" markerUnits="strokeWidth"><polygon points="0 0, 10 3.5, 0 7" fill={arrowColor} /></marker>
                         </defs>
-                        {edges.map(edge => {
-                            const sourceNode = nodeMap.get(edge.source);
-                            const targetNode = nodeMap.get(edge.target);
-                            if (!sourceNode || !targetNode) return null;
-                           
-                            const start = getBoundaryPoint(sourceNode, targetNode);
-                            const end = getBoundaryPoint(targetNode, sourceNode, 15);
-
-                            const isFaded = focusedNodeId && (!activeNodeIds?.has(edge.source) || !activeNodeIds?.has(edge.target));
-                            const path = `M ${start.x - contentBounds.offsetX} ${start.y - contentBounds.offsetY} L ${end.x - contentBounds.offsetX} ${end.y - contentBounds.offsetY}`;
-                            
-                            return <path key={edge.id} d={path} stroke={arrowColor} strokeWidth="2" fill="none" markerEnd="url(#arrowhead)" className="transition-opacity duration-500" style={{ opacity: isFaded ? 0.1 : 1 }} />;
-                        })}
+                        {drawnEdges.map(edge => (
+                            <path key={edge.id} d={edge.path} stroke={arrowColor} strokeWidth="2" fill="none" markerEnd="url(#arrowhead)" className="transition-opacity duration-500" style={{ opacity: edge.isFaded ? 0.1 : 1 }} />
+                        ))}
                     </svg>
-                    {nodes.map(node => <DiagramNodeComponent key={node.id} node={{...node, position: {x: node.position.x - contentBounds.offsetX, y: node.position.y - contentBounds.offsetY}}} isFaded={!!focusedNodeId && !activeNodeIds?.has(node.id)} onClick={onNodeClick} onMeasured={onNodeMeasured} onCopy={onCopy} onRegenerate={onRegenerate} onEdit={onEdit} />)}
+                    {nodes.map(node => <DiagramNodeComponent 
+                        key={node.id} 
+                        node={{...node, position: {x: node.position.x - contentBounds.offsetX, y: node.position.y - contentBounds.offsetY}}} 
+                        isFaded={!!focusedNodeId && !activeNodeIds?.has(node.id)} 
+                        isEditing={node.id === editingNodeId}
+                        onClick={onNodeClick} 
+                        onMeasured={onNodeMeasured} 
+                        onCopy={onCopy} 
+                        onRegenerate={onRegenerate} 
+                        onEdit={onEdit}
+                        onSaveEdit={onSaveEdit}
+                        onCancelEdit={onCancelEdit}
+                    />)}
                 </div>
             </div>
             <style>{`@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }`}</style>

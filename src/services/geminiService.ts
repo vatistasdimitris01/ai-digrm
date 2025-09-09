@@ -17,12 +17,18 @@ export const streamGroundedResponse = async (
     edges: Edge[],
     onStream: (textChunk: string) => void
 ): Promise<GroundedResponseData> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60-second timeout
+
     try {
         const response = await fetch('/api/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ prompt, nodes, edges }),
+            signal: controller.signal,
         });
+
+        clearTimeout(timeoutId);
 
         if (!response.ok || !response.body) {
             const errorText = await response.text();
@@ -105,7 +111,12 @@ export const streamGroundedResponse = async (
 
     } catch (error) {
         console.error("Error fetching grounded response from API proxy:", error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        let errorMessage;
+        if (error instanceof Error && error.name === 'AbortError') {
+             errorMessage = "The request timed out after 60 seconds. Please try a simpler prompt or check your connection.";
+        } else {
+             errorMessage = error instanceof Error ? error.message : String(error);
+        }
         onStream(`\n\nSorry, I encountered an error: ${errorMessage}`);
         return { sources: [], fullText: "" };
     }
