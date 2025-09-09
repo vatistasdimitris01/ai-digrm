@@ -283,6 +283,7 @@ const App: React.FC = () => {
                 ? { ...n, data: { ...n.data, isLoading: false } } 
                 : n
             ));
+            setEdges(prev => prev.filter(e => e.target !== aiNodeId));
             setIsLoading(false);
             return;
         }

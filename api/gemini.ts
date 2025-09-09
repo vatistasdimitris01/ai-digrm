@@ -1,5 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 
+export const config = {
+  runtime: 'edge',
+};
+
 // Types duplicated from ../types.ts for Vercel Deno runtime compatibility.
 // In a full project with a build system, these could be shared.
 type NodeType = 'user' | 'ai' | 'source' | 'system' | 'code';
