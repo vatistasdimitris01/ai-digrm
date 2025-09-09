@@ -1,0 +1,20 @@
+{
+  "short_name": "AI Diagram",
+  "name": "AI Diagram Chat",
+  "icons": [
+    {
+      "src": "https://i.postimg.cc/Wz9Fg3Kb/Google-AI-Studio-2025-09-09-T12-43-07-470-Z.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://i.postimg.cc/Wz9Fg3Kb/Google-AI-Studio-2025-09-09-T12-43-07-470-Z.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#111827",
+  "background_color": "#111827"
+}

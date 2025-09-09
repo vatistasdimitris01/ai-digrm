@@ -68,10 +68,11 @@ const getBoundaryPoint = (source: DiagramNode, target: DiagramNode, offset: numb
 const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, edges, theme, focusedNodeId, editingNodeId, onNodeClick, onClearFocus, onNodeMeasured, onCopy, onRegenerate, onEdit, onSaveEdit, onCancelEdit }, ref) => {
     const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
     const viewRef = useRef<HTMLDivElement>(null);
-    const isPanning = useRef(false);
+    const isInteracting = useRef(false);
     const isAnimating = useRef(false);
     const animationTimeout = useRef<number | null>(null);
-    const lastMousePosition = useRef({ x: 0, y: 0 });
+    const lastInteractionPosition = useRef({ x: 0, y: 0 });
+    const lastPinchDist = useRef(0);
 
     const nodeMap = useMemo(() => new Map(nodes.map(node => [node.id, node])), [nodes]);
 
@@ -199,7 +200,6 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
         const element = viewRef.current;
         if (!element) return;
     
-        // Temporarily hide UI elements that shouldn't be in the export
         const uiButtons = element.parentElement?.querySelectorAll<HTMLElement>('.absolute.top-4, .absolute.bottom-0');
         uiButtons?.forEach(el => el.style.visibility = 'hidden');
     
@@ -209,7 +209,6 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
             logging: false,
         });
     
-        // Restore UI elements
         uiButtons?.forEach(el => el.style.visibility = 'visible');
     
         const data = canvas.toDataURL('image/png');
@@ -248,48 +247,101 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
                 return { scale: newScale, x: newX, y: newY };
             });
         };
-
-        const handleMouseDown = (e: MouseEvent) => {
-            if (e.target !== e.currentTarget) return;
+        
+        const handleInteractionStart = (x: number, y: number) => {
+            if (isInteracting.current) return;
             isAnimating.current = false;
             if(animationTimeout.current) clearTimeout(animationTimeout.current);
-            isPanning.current = true;
-            lastMousePosition.current = { x: e.clientX, y: e.clientY };
+            isInteracting.current = true;
+            lastInteractionPosition.current = { x, y };
             view.style.cursor = 'grabbing';
         };
 
-        const handleMouseUp = () => { 
-            isPanning.current = false;
+        const handleInteractionMove = (x: number, y: number) => {
+            if (!isInteracting.current) return;
+            const dx = x - lastInteractionPosition.current.x;
+            const dy = y - lastInteractionPosition.current.y;
+            lastInteractionPosition.current = { x, y };
+            setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+        };
+
+        const handleInteractionEnd = () => { 
+            isInteracting.current = false;
+            lastPinchDist.current = 0;
             view.style.cursor = 'grab';
          };
 
-        const handleMouseMove = (e: MouseEvent) => {
-            if (isPanning.current) {
-                const dx = e.clientX - lastMousePosition.current.x;
-                const dy = e.clientY - lastMousePosition.current.y;
-                lastMousePosition.current = { x: e.clientX, y: e.clientY };
-                setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+        const handleMouseDown = (e: MouseEvent) => { if (e.target === e.currentTarget) handleInteractionStart(e.clientX, e.clientY); };
+        const handleMouseMove = (e: MouseEvent) => { if (isInteracting.current) handleInteractionMove(e.clientX, e.clientY); };
+        
+        const handleTouchStart = (e: TouchEvent) => {
+            if (e.target !== e.currentTarget) return;
+            e.preventDefault();
+            const touches = e.touches;
+            if (touches.length === 1) {
+                handleInteractionStart(touches[0].clientX, touches[0].clientY);
+            } else if (touches.length === 2) {
+                isInteracting.current = false; // Stop panning
+                const dx = touches[0].clientX - touches[1].clientX;
+                const dy = touches[0].clientY - touches[1].clientY;
+                lastPinchDist.current = Math.sqrt(dx * dx + dy * dy);
             }
         };
 
-        const handleBackgroundClick = (e: MouseEvent) => {
-            if (e.target === e.currentTarget) {
-                onClearFocus();
+        const handleTouchMove = (e: TouchEvent) => {
+            e.preventDefault();
+            const touches = e.touches;
+            if (touches.length === 1 && isInteracting.current) {
+                handleInteractionMove(touches[0].clientX, touches[0].clientY);
+            } else if (touches.length === 2) {
+                const dx = touches[0].clientX - touches[1].clientX;
+                const dy = touches[0].clientY - touches[1].clientY;
+                const newDist = Math.sqrt(dx * dx + dy * dy);
+                if (lastPinchDist.current > 0) {
+                    const rect = view.getBoundingClientRect();
+                    const pinchCenterX = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
+                    const pinchCenterY = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
+                    
+                    setTransform(prev => {
+                        const scaleFactor = newDist / lastPinchDist.current;
+                        const newScale = Math.max(0.1, Math.min(2, prev.scale * scaleFactor));
+                        const worldX = (pinchCenterX - prev.x) / prev.scale;
+                        const worldY = (pinchCenterY - prev.y) / prev.scale;
+                        const newX = pinchCenterX - worldX * newScale;
+                        const newY = pinchCenterY - worldY * newScale;
+                        return { scale: newScale, x: newX, y: newY };
+                    });
+                }
+                lastPinchDist.current = newDist;
             }
         };
+
+        const handleBackgroundClick = (e: MouseEvent) => { if (e.target === e.currentTarget) onClearFocus(); };
 
         view.addEventListener('wheel', handleWheel, { passive: false });
         view.addEventListener('mousedown', handleMouseDown);
         view.addEventListener('click', handleBackgroundClick);
-        window.addEventListener('mouseup', handleMouseUp);
+        window.addEventListener('mouseup', handleInteractionEnd);
         view.addEventListener('mousemove', handleMouseMove);
+        
+        view.addEventListener('touchstart', handleTouchStart, { passive: false });
+        view.addEventListener('touchmove', handleTouchMove, { passive: false });
+        view.addEventListener('touchend', handleInteractionEnd);
+        view.addEventListener('touchcancel', handleInteractionEnd);
+
 
         return () => {
             view.removeEventListener('wheel', handleWheel);
             view.removeEventListener('mousedown', handleMouseDown);
             view.removeEventListener('click', handleBackgroundClick);
-            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('mouseup', handleInteractionEnd);
             view.removeEventListener('mousemove', handleMouseMove);
+
+            view.removeEventListener('touchstart', handleTouchStart);
+            view.removeEventListener('touchmove', handleTouchMove);
+            view.removeEventListener('touchend', handleInteractionEnd);
+            view.removeEventListener('touchcancel', handleInteractionEnd);
+
             if(animationTimeout.current) clearTimeout(animationTimeout.current);
         };
     }, [onClearFocus]);
@@ -297,7 +349,7 @@ const DiagramView = forwardRef<DiagramViewHandle, DiagramViewProps>(({ nodes, ed
     const arrowColor = theme === 'dark' ? '#6b7280' : '#9ca3af';
 
     return (
-        <div ref={viewRef} className="w-full h-full absolute inset-0 overflow-hidden cursor-grab active:cursor-grabbing bg-slate-50 dark:bg-gray-900">
+        <div ref={viewRef} className="w-full h-full absolute inset-0 overflow-hidden cursor-grab active:cursor-grabbing bg-slate-50 dark:bg-gray-900" style={{ touchAction: 'none' }}>
             <div
                 className="absolute"
                 style={{

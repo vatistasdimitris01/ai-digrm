@@ -271,7 +271,7 @@ const App: React.FC = () => {
             const { sources, weather, stock, code, position, reasoning, sourceNodeId: connectionTargetId, responseText } = response;
             
             if (!responseText) {
-                throw new Error("AI returned an empty response.");
+                throw new Error("Sorry, the AI did not provide a response. Please try rephrasing your prompt.");
             }
 
             const finalAiData: NodeData = { text: responseText, weather, stock, reasoning, isLoading: false, sources };
@@ -358,9 +358,10 @@ const App: React.FC = () => {
             const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
             setNodes(prev => prev.map(n => 
                 n.id === aiNodeId 
-                ? { ...n, data: { ...n.data, text: `Sorry, an error occurred: ${errorMessage}`, isLoading: false } } 
+                ? { ...n, data: { ...n.data, text: `${errorMessage}`, isLoading: false } } 
                 : n
             ));
+             setEdges(prev => prev.filter(e => e.target !== aiNodeId || e.source !== userNodeId));
         } finally {
             setIsLoading(false);
         }
