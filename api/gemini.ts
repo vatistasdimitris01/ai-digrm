@@ -1,4 +1,3 @@
-// FIX: Use standard Node.js import for @google/genai instead of Deno-specific syntax.
 import { GoogleGenAI } from "@google/genai";
 
 // Types duplicated from ../types.ts for Vercel Deno runtime compatibility.
@@ -86,7 +85,6 @@ const systemInstruction = `You are an expert diagramming assistant with powerful
 }`;
 
 export default async (req: Request): Promise<Response> => {
-    // FIX: Use process.env for Node.js compatibility instead of Deno.env
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
         return new Response(JSON.stringify({ error: "API_KEY environment variable not set" }), { status: 500, headers: { "Content-Type": "application/json" } });
