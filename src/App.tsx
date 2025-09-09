@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import type { DiagramNode, Edge, NodeData, Source, CodeData } from './types';
 import ChatInput from './components/ChatInput';
 import DiagramView, { type DiagramViewHandle } from './components/DiagramView';
-import { streamGroundedResponse } from './services/geminiService';
+import { getGroundedResponse } from './services/geminiService';
 import { HomeIcon, SunIcon, MoonIcon, ResetFocusIcon, ExportIcon } from './components/Icons';
 
 const NODE_WIDTH = 350;
@@ -265,111 +265,104 @@ const App: React.FC = () => {
         const recentNodeIds = new Set(recentNodes.map(n => n.id));
         const recentEdges = edgesRef.current.filter(e => recentNodeIds.has(e.source) || recentNodeIds.has(e.target));
 
-        const streamedData: { text: string } = { text: "" };
-        const streamPromise = streamGroundedResponse(prompt, recentNodes, recentEdges, (textChunk) => {
-            streamedData.text += textChunk;
+        try {
+            const response = await getGroundedResponse(prompt, recentNodes, recentEdges);
+            const { sources, weather, stock, code, position, reasoning, sourceNodeId: connectionTargetId, responseText } = response;
+            
+            if (!responseText) {
+                throw new Error("AI returned an empty response.");
+            }
+
+            const finalAiData: NodeData = { text: responseText, weather, stock, reasoning, isLoading: false, sources };
+            const estimatedSize = estimateAiNodeSize({...finalAiData, code });
+
+            const nodesToPlaceInfo: Array<{ id: string, type: 'ai' | 'source' | 'code', data: NodeData, width: number, height: number, startPos: { x: number, y: number } }> = [];
+            
+            const aiStartPos = position || { x: userNode.position.x, y: userNode.position.y + 600 };
+            nodesToPlaceInfo.push({ id: aiNodeId, type: 'ai', data: finalAiData, width: estimatedSize.width, height: estimatedSize.height, startPos: aiStartPos });
+            
+            const newSourceInfos: Array<Source> = [];
+            const existingSourcesMap = new Map<string, string>();
+            nodesRef.current.forEach(n => {
+                if (n.type === 'source' && n.data.uri) existingSourcesMap.set(n.data.uri, n.id);
+            });
+
+            if (sources) {
+                sources.forEach(source => {
+                    if (!existingSourcesMap.has(source.uri)) {
+                        newSourceInfos.push(source);
+                        existingSourcesMap.set(source.uri, `new-source-${source.uri}`); // Placeholder
+                    }
+                });
+            }
+            
+            newSourceInfos.forEach((source, index) => {
+                const sourceNodeStartPos = {
+                    x: aiStartPos.x + (index - (newSourceInfos.length - 1) / 2) * (NODE_WIDTH + 80),
+                    y: aiStartPos.y + 400,
+                };
+                nodesToPlaceInfo.push({ id: `source-${Date.now()}-${index}`, type: 'source', data: { text: source.title, uri: source.uri }, width: NODE_WIDTH, height: SOURCE_NODE_HEIGHT, startPos: sourceNodeStartPos });
+            });
+
+            if (code) {
+                 const codeNodeStartPos = { x: aiStartPos.x, y: aiStartPos.y + 400 };
+                 nodesToPlaceInfo.push({ id: `code-${Date.now()}`, type: 'code', data: { text: code.content, language: code.language }, width: CODE_NODE_WIDTH, height: 200, startPos: codeNodeStartPos });
+            }
+            
+            let collisionCheckNodes = nodesRef.current.filter(n => n.id !== aiNodeId);
+            const newlyPlacedNodes: DiagramNode[] = [];
+            
+            nodesToPlaceInfo.forEach(info => {
+                const finalPosition = findNonOverlappingPosition(collisionCheckNodes, info.startPos, info.width, info.height);
+                const finalNode: DiagramNode = { ...info, position: finalPosition };
+                newlyPlacedNodes.push(finalNode);
+                collisionCheckNodes.push(finalNode);
+            });
+
+            const newSourceNodes = newlyPlacedNodes.filter(n => n.type === 'source');
+            const newCodeNode = newlyPlacedNodes.find(n => n.type === 'code');
+            
+            const newEdges: Edge[] = [];
+            
+            if (sources) {
+                sources.forEach(source => {
+                    const sourceId = existingSourcesMap.get(source.uri) ?? newSourceNodes.find(n => n.data.uri === source.uri)?.id;
+                    if (sourceId) {
+                        newEdges.push({ id: `${aiNodeId}-to-${sourceId}`, source: aiNodeId, target: sourceId });
+                    }
+                });
+            }
+            
+            if (newCodeNode) {
+                newEdges.push({ id: `${aiNodeId}-to-${newCodeNode.id}`, source: aiNodeId, target: newCodeNode.id });
+            }
+            
+            setNodes(prev => [...prev.filter(n => n.id !== aiNodeId), ...newlyPlacedNodes]);
+            
+            setEdges(prev => {
+                const connectionSourceId = connectionTargetId && nodesRef.current.some(n => n.id === connectionTargetId) ? connectionTargetId : userNodeId;
+                const edgesWithoutTemporary = prev.filter(e => e.target !== aiNodeId);
+                const finalEdges = [...edgesWithoutTemporary, ...newEdges];
+                finalEdges.push({id: `${connectionSourceId}-to-${aiNodeId}`, source: connectionSourceId, target: aiNodeId});
+                return finalEdges.filter((edge, index, self) => index === self.findIndex(e => (e.source === edge.source && e.target === edge.target)));
+            });
+            
+            setTimeout(() => {
+                 diagramViewRef.current?.focusOnNode(aiNodeId);
+                 setFocusedNodeId(aiNodeId);
+            }, 100);
+
+        } catch (error) {
+            console.error("Failed to get AI response:", error);
+            const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
             setNodes(prev => prev.map(n => 
                 n.id === aiNodeId 
-                ? { ...n, data: { ...n.data, text: streamedData.text } } 
+                ? { ...n, data: { ...n.data, text: `Sorry, an error occurred: ${errorMessage}`, isLoading: false } } 
                 : n
             ));
-        });
-
-        const { sources, weather, stock, code, position, reasoning, sourceNodeId: connectionTargetId, fullText } = await streamPromise;
-        
-        if (!fullText) {
-            const errorMessage = streamedData.text.trim() !== "" 
-                ? streamedData.text 
-                : "Sorry, the AI did not provide a response. Please try rephrasing your prompt.";
-
-            setNodes(prev => prev.map(n => 
-                n.id === aiNodeId 
-                ? { ...n, data: { ...n.data, text: errorMessage, isLoading: false } } 
-                : n
-            ));
+        } finally {
             setIsLoading(false);
-            return;
         }
-
-        const finalAiData: NodeData = { text: fullText, weather, stock, reasoning, isLoading: false, sources };
-        const estimatedSize = estimateAiNodeSize({...finalAiData, code });
-
-        const nodesToPlaceInfo: Array<{ id: string, type: 'ai' | 'source' | 'code', data: NodeData, width: number, height: number, startPos: { x: number, y: number } }> = [];
-        
-        const aiStartPos = position || { x: userNode.position.x, y: userNode.position.y + 600 };
-        nodesToPlaceInfo.push({ id: aiNodeId, type: 'ai', data: finalAiData, width: estimatedSize.width, height: estimatedSize.height, startPos: aiStartPos });
-        
-        const newSourceInfos: Array<Source> = [];
-        const existingSourcesMap = new Map<string, string>();
-        nodesRef.current.forEach(n => {
-            if (n.type === 'source' && n.data.uri) existingSourcesMap.set(n.data.uri, n.id);
-        });
-
-        if (sources) {
-            sources.forEach(source => {
-                if (!existingSourcesMap.has(source.uri)) {
-                    newSourceInfos.push(source);
-                    existingSourcesMap.set(source.uri, `new-source-${source.uri}`); // Placeholder
-                }
-            });
-        }
-        
-        newSourceInfos.forEach((source, index) => {
-            const sourceNodeStartPos = {
-                x: aiStartPos.x + (index - (newSourceInfos.length - 1) / 2) * (NODE_WIDTH + 80),
-                y: aiStartPos.y + 400,
-            };
-            nodesToPlaceInfo.push({ id: `source-${Date.now()}-${index}`, type: 'source', data: { text: source.title, uri: source.uri }, width: NODE_WIDTH, height: SOURCE_NODE_HEIGHT, startPos: sourceNodeStartPos });
-        });
-
-        if (code) {
-             const codeNodeStartPos = { x: aiStartPos.x, y: aiStartPos.y + 400 };
-             nodesToPlaceInfo.push({ id: `code-${Date.now()}`, type: 'code', data: { text: code.content, language: code.language }, width: CODE_NODE_WIDTH, height: 200, startPos: codeNodeStartPos });
-        }
-        
-        let collisionCheckNodes = nodesRef.current.filter(n => n.id !== aiNodeId);
-        const newlyPlacedNodes: DiagramNode[] = [];
-        
-        nodesToPlaceInfo.forEach(info => {
-            const finalPosition = findNonOverlappingPosition(collisionCheckNodes, info.startPos, info.width, info.height);
-            const finalNode: DiagramNode = { ...info, position: finalPosition };
-            newlyPlacedNodes.push(finalNode);
-            collisionCheckNodes.push(finalNode);
-        });
-
-        const newSourceNodes = newlyPlacedNodes.filter(n => n.type === 'source');
-        const newCodeNode = newlyPlacedNodes.find(n => n.type === 'code');
-        
-        const newEdges: Edge[] = [];
-        
-        if (sources) {
-            sources.forEach(source => {
-                const sourceId = existingSourcesMap.get(source.uri) ?? newSourceNodes.find(n => n.data.uri === source.uri)?.id;
-                if (sourceId) {
-                    newEdges.push({ id: `${aiNodeId}-to-${sourceId}`, source: aiNodeId, target: sourceId });
-                }
-            });
-        }
-        
-        if (newCodeNode) {
-            newEdges.push({ id: `${aiNodeId}-to-${newCodeNode.id}`, source: aiNodeId, target: newCodeNode.id });
-        }
-        
-        setNodes(prev => [...prev.filter(n => n.id !== aiNodeId), ...newlyPlacedNodes]);
-        
-        setEdges(prev => {
-            const connectionSourceId = connectionTargetId && nodesRef.current.some(n => n.id === connectionTargetId) ? connectionTargetId : userNodeId;
-            const edgesWithoutTemporary = prev.filter(e => e.target !== aiNodeId);
-            const finalEdges = [...edgesWithoutTemporary, ...newEdges];
-            finalEdges.push({id: `${connectionSourceId}-to-${aiNodeId}`, source: connectionSourceId, target: aiNodeId});
-            return finalEdges.filter((edge, index, self) => index === self.findIndex(e => (e.source === edge.source && e.target === edge.target)));
-        });
-        
-        setIsLoading(false);
-        setTimeout(() => {
-             diagramViewRef.current?.focusOnNode(aiNodeId);
-             setFocusedNodeId(aiNodeId);
-        }, 100);
 
     }, []);
 
