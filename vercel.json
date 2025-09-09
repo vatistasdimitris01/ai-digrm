@@ -1,7 +1,8 @@
 {
-    "functions": {
-        "api/**/*.ts": {
-            "runtime": "edge"
+    "builds": [
+        {
+            "src": "api/**/*.ts",
+            "use": "@vercel/edge"
         }
-    }
+    ]
 }
