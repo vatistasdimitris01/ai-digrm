@@ -278,12 +278,15 @@ const App: React.FC = () => {
         const { sources, weather, stock, code, position, reasoning, sourceNodeId: connectionTargetId, fullText } = await streamPromise;
         
         if (!fullText) {
+            const errorMessage = streamedData.text.trim() !== "" 
+                ? streamedData.text 
+                : "Sorry, the AI did not provide a response. Please try rephrasing your prompt.";
+
             setNodes(prev => prev.map(n => 
                 n.id === aiNodeId 
-                ? { ...n, data: { ...n.data, isLoading: false } } 
+                ? { ...n, data: { ...n.data, text: errorMessage, isLoading: false } } 
                 : n
             ));
-            setEdges(prev => prev.filter(e => e.target !== aiNodeId));
             setIsLoading(false);
             return;
         }
