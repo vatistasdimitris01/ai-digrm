@@ -17,7 +17,7 @@ const findNonOverlappingPosition = (
     nodeWidth: number,
     nodeHeight: number
 ): { x: number; y: number } => {
-    const PADDING = 80;
+    const PADDING = 150; // Increased padding for better spacing
     let currentPos = { ...startPos };
     let isOverlapping = true;
     let attempts = 0;
@@ -58,14 +58,15 @@ const findNonOverlappingPosition = (
 
 const estimateAiNodeSize = (data: Partial<NodeData> & { code?: CodeData }): { width: number, height: number } => {
     const baseWidth = NODE_WIDTH;
-    let estimatedHeight = 40; 
+    let estimatedHeight = 60; // Increased base height for internal padding
 
     if (data.weather) estimatedHeight += 70;
     if (data.stock) estimatedHeight += 90;
     if (data.reasoning) estimatedHeight += 60;
     if (data.text) {
         const lines = (data.text.match(/\n/g) || []).length + 1;
-        const textHeight = Math.max(lines * 20, data.text.length * 0.45); 
+        // Increased multipliers to better account for text wrapping and length
+        const textHeight = Math.max(lines * 22, data.text.length * 0.65); 
         estimatedHeight += textHeight;
     }
 
