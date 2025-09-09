@@ -1,0 +1,7 @@
+{
+    "functions": {
+        "api/gemini.ts": {
+            "runtime": "deno@1.45.1"
+        }
+    }
+}

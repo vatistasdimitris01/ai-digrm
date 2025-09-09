@@ -1,0 +1,5 @@
+{
+  "name": "AI Diagram Chat",
+  "description": "An AI chat application that visualizes the conversation as an interactive, flowing diagram, including citations from Google Search grounding as distinct nodes.",
+  "requestFramePermissions": []
+}
